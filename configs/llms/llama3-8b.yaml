@@ -1,4 +1,22 @@
-name: meta-llama/Meta-Llama-3-8B-Instruct
+name: /anvme/workspace/b270dd10-rlselector_new/b270dd10-rlselector-1783653062/hf/Llama-3-8B-Instruct
+alias: llama3-8b-instruct
+
+memit_joint:
+  target_loss_mode: hidden_mse
+  # null keeps uniform context weighting; set 0.5 for a 50/50 split between
+  # the original prompt and all generated context prompts in E2E CE mode.
+  original_prompt_loss_share: null
+  gd_lr: 1.0e-4
+  gd_weight_decay: 0.0
+  joint_epochs: 300
+  alpha: 4.0
+  gd_max_grad_norm: 100.0
+  layer_norm_mode: none
+  layer_norm_beta: 0.0
+  layer_update_max_ratio: 0.15
+
+memit_ori:
+  L2: 0.0
 
 ##### for WISE ####
 ## alternative: WISE-Merge, WISE-Retrieve
@@ -103,11 +121,11 @@ mom2_update_weight:
   # - 452040
   # - 478319
   # - 418918
-  - 30000
-  - 30000
-  - 30000
-  - 30000
-  - 30000
+  - 15000
+  - 15000
+  - 15000
+  - 15000
+  - 15000
   # norm1
   # - 2987.46  
   # - 4301.26

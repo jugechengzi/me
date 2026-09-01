@@ -5,12 +5,31 @@ defaults:
 seed: 0
 gpu: 0
 model_dtype: bfloat16 #choices=["auto","float32","bfloat16"]
-bs: 100
+bs: 400
 data: multi_counterfact_20877 #choices=[multi_counterfact_20877,zsre_mend_eval_19086,wiki_cf_2266,mquake_cf_9218, counterfact_2000]
 neighborhood_logits: False
+neighborhood_locality_topks: [1, 5, 10]
+neighborhood_locality_batch_size: 8 # batches cached logits during KL/top-k computation
 cache_filename_suffix: "local" #a suffix added to cache filename, useful when you want to use different cache settings
 cache_zs: "default"
 cov_mode: "default" #choices=["default","random","identity"]
+# Experimental next-token-probability weighting for covariance statistics.
+# false preserves the original equal-token calculation exactly.
+cov_probability_weighted: false
+cov_prob_weight_epsilon: 0.1
+cov_prob_weight_alpha: 0.5
+# Standalone LoRA covariance precomputation. q/k/v and gate/up are mapped to
+# shared input-covariance groups by experiments/precompute_lora_covariances.py.
+lora_cov:
+  layers: all
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  cache_namespace: lora-all-linear
+  force_recompute: false
+  random_sample: 1
+  allow_missing: false
+  dry_run: false
+  document_batch_size: 100
+  num_workers: 4
 lti: False
 num_edits: 2000
 test_only: False
@@ -32,11 +51,13 @@ save_name: default #the prefix of the name of saved model, {dataset}-{save_name}
 #format of save_name: 2000-bs100
 load_name: default #the prefix of the name of saved model to be loaded, {dataset}-{load_name}-{model_name}.pt
 #format of save_name: 2000-bs100
-data_dir: /mnt/ssd/weiliu/student/xhm
-results_dir: /mnt/hdd/weiliu/student/xhm/edit-result-final #per alg
-cache_dir: /mnt/hdd/weiliu/student/xhm/edit-cache-final #per llm
+# Optional shared name for caching the original-model evaluation. This lets
+# evaluations of multiple epoch checkpoints reuse one baseline and one set of
+# original neighborhood logits while keeping distinct post-edit save_name(s).
+pre_eval_name: null
+data_dir: /anvme/workspace/b270dd10-rlselector_new/b270dd10-rlselector-1783653062/data
+results_dir: /anvme/workspace/b270dd10-rlselector_new/b270dd10-rlselector-1783653062/results/model_edit/edit-result-final #per alg
+cache_dir: /anvme/workspace/b270dd10-rlselector_new/b270dd10-rlselector-1783653062/results/model_edit/edit-cache-final #per llm
 
 lw_eval: False
 lbq_eval: False
-
-

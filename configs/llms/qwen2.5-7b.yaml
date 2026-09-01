@@ -1,4 +1,20 @@
 name: Qwen/Qwen2.5-7B-Instruct
+alias: qwen2.5-7b-instruct
+
+memit_joint:
+  target_loss_mode: hidden_mse
+  original_prompt_loss_share: null
+  gd_lr: 1.0e-4
+  gd_weight_decay: 0.0
+  joint_epochs: 300
+  alpha: 4.0
+  gd_max_grad_norm: 100.0
+  layer_norm_mode: none
+  layer_norm_beta: 0.0
+  layer_update_max_ratio: 0.15
+
+memit_ori:
+  L2: 0.0
 
 ##### for WISE ####
 ## alternative: WISE-Merge, WISE-Retrieve

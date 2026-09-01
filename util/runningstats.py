@@ -511,6 +511,64 @@ class SecondMoment(Stat):
         self.mom2 = torch.from_numpy(state["mom2"])
 
 
+class WeightedSecondMoment(Stat):
+    """
+    Running computation of a weighted, non-centered second moment.
+
+    Given samples ``a_i`` and non-negative scalar weights ``w_i``, ``moment``
+    returns ``sum_i w_i a_i a_i^T / sum_i w_i``.
+    """
+
+    def __init__(self, state=None):
+        if state is not None:
+            return super().__init__(state)
+        self.count = 0
+        self.weight_sum = None
+        self.mom2 = None
+
+    def add(self, a, weights):
+        a = self._normalize_add_shape(a)
+        if len(a) == 0:
+            return
+        weights = torch.as_tensor(weights, dtype=a.dtype, device=a.device).reshape(-1)
+        if len(weights) != len(a):
+            raise ValueError(
+                f"Expected one weight per sample, got {len(weights)} weights "
+                f"for {len(a)} samples"
+            )
+        if not torch.isfinite(weights).all() or (weights < 0).any():
+            raise ValueError("Second-moment weights must be finite and non-negative")
+        if self.count == 0:
+            self.mom2 = a.new_zeros(a.shape[1], a.shape[1])
+            self.weight_sum = a.new_zeros(())
+        self.count += a.shape[0]
+        self.weight_sum += weights.sum()
+        self.mom2 += a.t().mm(a * weights.unsqueeze(1))
+
+    def to_(self, device):
+        if self.mom2 is not None:
+            self.mom2 = self.mom2.to(device)
+            self.weight_sum = self.weight_sum.to(device)
+
+    def moment(self):
+        if self.weight_sum is None or self.weight_sum.item() <= 0:
+            raise ValueError("Cannot compute a weighted moment with zero total weight")
+        return self.mom2 / self.weight_sum
+
+    def state_dict(self):
+        return dict(
+            constructor=self.__module__ + "." + self.__class__.__name__ + "()",
+            count=self.count,
+            weight_sum=self.weight_sum.cpu().numpy(),
+            mom2=self.mom2.cpu().float().numpy(),
+        )
+
+    def load_state_dict(self, state):
+        self.count = int(state["count"])
+        self.weight_sum = torch.from_numpy(state["weight_sum"])
+        self.mom2 = torch.from_numpy(state["mom2"])
+
+
 class Bincount(Stat):
     """
     Running bincount.  The counted array should be an integer type with

@@ -1,3 +1,9 @@
 name: memit
-add_old_keys: True
-L2: 0
+gd_tolerance: 1.0e-5
+gd_log_interval: 10
+joint_context_training: True
+joint_checkpoint_enabled: True
+joint_checkpoint_interval: 50
+joint_checkpoint_resume: True
+mi_cache_enabled: True
+mi_cache_force_recompute: False

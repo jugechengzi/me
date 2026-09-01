@@ -5,7 +5,14 @@ from tqdm.auto import tqdm
 import struct
 import os
 from util.nethook import Trace, set_requires_grad
-from util.runningstats import CombinedStat, Mean, NormMean, SecondMoment, tally
+from util.runningstats import (
+    CombinedStat,
+    Mean,
+    NormMean,
+    SecondMoment,
+    WeightedSecondMoment,
+    tally,
+)
 from omegaconf import DictConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -27,6 +34,30 @@ STAT_TYPES = {
 }
 
 
+def _next_token_probabilities(logits, input_ids):
+    """Return p(input_ids[t + 1] | input_ids[:t + 1]) for every position t."""
+    next_token_logits = logits[:, :-1, :]
+    next_token_ids = input_ids[:, 1:].unsqueeze(-1)
+    target_logits = next_token_logits.gather(-1, next_token_ids).squeeze(-1)
+    return torch.exp(target_logits - torch.logsumexp(next_token_logits, dim=-1))
+
+
+def _smooth_probability_weights(probabilities, epsilon, alpha):
+    """Floor and flatten next-token probability weights."""
+    if not 0 <= epsilon <= 1:
+        raise ValueError("prob_weight_epsilon must be between 0 and 1")
+    if alpha <= 0:
+        raise ValueError("prob_weight_alpha must be greater than 0")
+    return epsilon + (1 - epsilon) * probabilities.pow(alpha)
+
+
+def _probability_weighted_cache_suffix(cache_filename_suffix, epsilon, alpha):
+    epsilon_text = format(epsilon, ".6g").replace(".", "p")
+    alpha_text = format(alpha, ".6g").replace(".", "p")
+    weighted_suffix = f"next-token-prob-eps{epsilon_text}-alpha{alpha_text}"
+    return "-".join(filter(None, [cache_filename_suffix, weighted_suffix]))
+
+
 def layer_stats(
         cfg,
         model,
@@ -40,7 +71,10 @@ def layer_stats(
         progress=tqdm,
         force_recompute=False,
         cache_filename_suffix="",
-        random_sample=1
+        random_sample=1,
+        probability_weighted=False,
+        prob_weight_epsilon=0.1,
+        prob_weight_alpha=0.5,
 ):
     """
     Function to load or compute cached stats.
@@ -52,9 +86,9 @@ def layer_stats(
         # raw_ds = Dataset.from_file('data/wikipedia-train.arrow')
         # raw_ds = {'train': raw_ds}
         if ds_name in ["wikipedia", "wikitext"]:
+                # dict(wikitext="wikitext-103-raw-v1", wikipedia="20200501.en")[ds_name]
             raw_ds = load_dataset(
                 ds_name,
-                # dict(wikitext="wikitext-103-raw-v1", wikipedia="20200501.en")[ds_name]
                 dict(wikitext="wikitext-103-raw-v1", wikipedia="20220301.en")[ds_name]
             )
         else:
@@ -78,19 +112,31 @@ def layer_stats(
         precision = "float64"
     dtype = getattr(torch, precision)
     # stats_dir = Path(stats_dir)
-    filename=cfg.cache_dir+"/stats/"+cfg.llms.name.replace("/","-") + "/layer-" + str(layer) +("-" if cache_filename_suffix !="" else "")+ cache_filename_suffix + ".npz"
+    if probability_weighted:
+        if set(to_collect) != {"mom2"}:
+            raise ValueError("Probability weighting currently supports only mom2")
+        cache_filename_suffix = _probability_weighted_cache_suffix(
+            cache_filename_suffix, prob_weight_epsilon, prob_weight_alpha
+        )
+    filename=cfg.cache_dir+"/stats/"+cfg.llms.alias.replace("/","-") + "/layer-" + str(layer) +("-" if cache_filename_suffix !="" else "")+ cache_filename_suffix + ".npz"
     if cache_filename_suffix == "local":
-        sample_indices_filename=cfg.cache_dir+"/stats/"+cfg.llms.name.replace("/","-") + "/layer-" + str(layer) + "-local-sample-indices.npz"
+        sample_indices_filename=cfg.cache_dir+"/stats/"+cfg.llms.alias.replace("/","-") + "/layer-" + str(layer) + "-local-sample-indices.npz"
     # file_extension = f"{model_name}/{ds_name}_stats/{layer_name}_{precision}_{'-'.join(sorted(to_collect))}{size_suffix}.npz"
     # filename = stats_dir / file_extension
 
     # print(f"Computing Cov locally....")
 
-    ds = get_ds(npos) if not os.path.exists(filename) else None
+    # A forced recomputation still needs the source dataset even when a cache
+    # file already exists. Without this condition tally() receives None and
+    # fails while constructing its DataLoader.
+    ds = get_ds(npos) if force_recompute or not os.path.exists(filename) else None
     if progress is None:
         progress = lambda x: x
 
-    stat = CombinedStat(**{k: STAT_TYPES[k]() for k in to_collect})
+    if probability_weighted:
+        stat = CombinedStat(mom2=WeightedSecondMoment())
+    else:
+        stat = CombinedStat(**{k: STAT_TYPES[k]() for k in to_collect})
     tally_loader = tally(
         stat,
         ds,
@@ -115,17 +161,51 @@ def layer_stats(
         for batch_group in progress(loader, total=batch_count):
             for batch in batch_group:
                 batch = dict_to_(batch, device)
-                with Trace(
-                        model, cfg.llms.rewrite_module_tmp.format(layer), retain_input=True, retain_output=False, stop=True
-                ) as tr:
-                    model(**batch)
-                feats = flatten_masked_batch(tr.input, batch["attention_mask"])
+                if probability_weighted:
+                    with Trace(
+                            model,
+                            cfg.llms.rewrite_module_tmp.format(layer),
+                            retain_input=True,
+                            retain_output=False,
+                            stop=False,
+                    ) as tr:
+                        outputs = model(**batch, use_cache=False)
+                    logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+                    probabilities = _next_token_probabilities(logits, batch["input_ids"])
+                    # Logits are much larger than the scalar probabilities; release
+                    # them before accumulating this batch and starting the next one.
+                    del outputs, logits
+                    next_token_mask = (
+                        batch["attention_mask"][:, :-1].bool()
+                        & batch["attention_mask"][:, 1:].bool()
+                    )
+                    feats = flatten_masked_batch(
+                        tr.input[:, 1:], next_token_mask
+                    )
+                    weights = _smooth_probability_weights(
+                        probabilities[next_token_mask],
+                        prob_weight_epsilon,
+                        prob_weight_alpha,
+                    )
+                else:
+                    with Trace(
+                            model,
+                            cfg.llms.rewrite_module_tmp.format(layer),
+                            retain_input=True,
+                            retain_output=False,
+                            stop=True,
+                    ) as tr:
+                        model(**batch)
+                    feats = flatten_masked_batch(tr.input, batch["attention_mask"])
                 # feats = flatten_masked_batch(tr.output, batch["attention_mask"])
                 if "normlize" in cache_filename_suffix:
                     import torch.nn.functional as F
                     feats = F.normalize(feats, p=2, dim=-1)
                 feats = feats.to(dtype=dtype)
-                stat.add(feats)
+                if probability_weighted:
+                    stat.add(feats, weights.to(dtype=dtype))
+                else:
+                    stat.add(feats)
     return stat
 
 def get_cov(
@@ -139,14 +219,23 @@ def get_cov(
     inv: bool = False,
     force_recompute: bool = False,
     cache_filename_suffix="",
-    random_sample=1
+    random_sample=1,
+    probability_weighted=None,
+    prob_weight_epsilon=None,
+    prob_weight_alpha=None,
 ) -> torch.Tensor:
     """
     Retrieves covariance statistics, then computes the algebraic inverse.
     Caches result for future use.
     """
     device = torch.device("cuda:{}".format(cfg.gpu) if torch.cuda.is_available() else "cpu")
-    model_name = cfg.llms.name.replace("/", "-")
+    model_name = cfg.llms.alias.replace("/", "-")
+    if probability_weighted is None:
+        probability_weighted = cfg.get("cov_probability_weighted", False)
+    if prob_weight_epsilon is None:
+        prob_weight_epsilon = cfg.get("cov_prob_weight_epsilon", 0.1)
+    if prob_weight_alpha is None:
+        prob_weight_alpha = cfg.get("cov_prob_weight_alpha", 0.5)
     # key = (model_name, cfg.llms.rewrite_module_tmp.format(layer))
 
     print(f"Retrieving covariance statistics for {model_name} @ layer {cfg.llms.rewrite_module_tmp.format(layer)}.")
@@ -163,11 +252,48 @@ def get_cov(
         batch_tokens=cfg.llms.mom2_maxseqlen,
         force_recompute=force_recompute,
         cache_filename_suffix=cache_filename_suffix,
-        random_sample=random_sample
+        random_sample=random_sample,
+        probability_weighted=probability_weighted,
+        prob_weight_epsilon=prob_weight_epsilon,
+        prob_weight_alpha=prob_weight_alpha,
     )
     cov=stat.mom2.moment()
     return (
         torch.inverse(cov) if inv else cov
+    )
+
+
+def get_probability_weighted_cov(
+    cfg: DictConfig,
+    model: AutoModelForCausalLM,
+    tok: AutoTokenizer,
+    layer: int,
+    mom2_dataset: str,
+    mom2_n_samples: str,
+    mom2_dtype: str,
+    inv: bool = False,
+    force_recompute: bool = False,
+    cache_filename_suffix="",
+    random_sample=1,
+    prob_weight_epsilon: float = 0.1,
+    prob_weight_alpha: float = 0.5,
+) -> torch.Tensor:
+    """Compute E[w h h^T] / E[w] using smoothed next-token probabilities."""
+    return get_cov(
+        cfg,
+        model,
+        tok,
+        layer,
+        mom2_dataset,
+        mom2_n_samples,
+        mom2_dtype,
+        inv=inv,
+        force_recompute=force_recompute,
+        cache_filename_suffix=cache_filename_suffix,
+        random_sample=random_sample,
+        probability_weighted=True,
+        prob_weight_epsilon=prob_weight_epsilon,
+        prob_weight_alpha=prob_weight_alpha,
     )
 
 def is_null_numpy_value(v):

@@ -1,4 +1,18 @@
-name: THUDM/glm-4-9b-chat
+name: zai-org/glm-4-9b-chat-hf
+alias: glm4-9b-chat-hf
+
+memit_joint:
+  gd_lr: 1.0e-4
+  gd_weight_decay: 0.0
+  joint_epochs: 300
+  alpha: 4.0
+  gd_max_grad_norm: 100.0
+  layer_norm_mode: none
+  layer_norm_beta: 0.0
+  layer_update_max_ratio: 0.15
+
+memit_ori:
+  L2: 0.0
 
 fact_token: subject_last
 
@@ -10,11 +24,11 @@ v_weight_decay: 0.5
 kl_factor: 0.0625
 
 layers:
-  - 4
   - 5
   - 6
   - 7
   - 8
+  - 9
 mom2_update_weight:
   - 15000
   - 15000
@@ -23,16 +37,52 @@ mom2_update_weight:
   - 15000
 layer_selection: all
 
-emb_module: transformer.embedding.word_embeddings
-rewrite_module_tmp: transformer.encoder.layers.{}.mlp.dense_4h_to_h
-layer_module_tmp: transformer.encoder.layers.{}
-mlp_module_tmp: transformer.encoder.layers.{}.mlp
-attn_module_tmp: transformer.encoder.layers.{}.self_attention
-ln_f_module: transformer.encoder.final_layernorm
-lm_head_module: transformer.output_layer
+emb_module: model.embed_tokens
+rewrite_module_tmp: model.layers.{}.mlp.down_proj
+layer_module_tmp: model.layers.{}
+mlp_module_tmp: model.layers.{}.mlp
+attn_module_tmp: model.layers.{}.self_attn
+ln_f_module: model.norm
+lm_head_module: lm_head
 
 mom2_dataset: wikipedia
 mom2_n_samples: 100000
 mom2_dtype: float32
 mom2_adjustment: true
 mom2_maxseqlen: 8192 #8192 will cause out of memory for 48G gpu。
+
+##### for WISE ####
+## alternative: WISE-Merge, WISE-Retrieve
+# for merge (if merge)
+densities: 0.53
+weights: 1.0
+
+# for retrieve (if retrieve, pls set to True)
+retrieve: False
+replay: False # True --> will replay the past editing instances: see https://arxiv.org/abs/2405.14768 Appendix B.3
+
+model_parallel: False
+use_chat_template: True
+
+mask_ratio: 0.2
+edit_lr: 1.0
+n_iter: 70
+norm_constraint: 1.0
+act_margin: [5.0, 20.0, 10.0] # alpha, beta, gamma
+act_ratio: 0.88
+save_freq: 500
+merge_freq: 1000
+merge_alg: 'ties'
+objective_optimization: 'only_label'
+inner_params:
+- model.layers[23].mlp.down_proj.weight
+##### for WISE end ####
+
+#### for LTI start ####
+mid_kl_factor: 0.0425
+last_kl_factor: 0.0625
+nll_factor: 1
+midlayers:
+  - 15
+constr_pos: subject
+#### for LTI end ####

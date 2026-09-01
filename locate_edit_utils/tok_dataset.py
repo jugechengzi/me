@@ -94,6 +94,9 @@ def flatten_masked_batch(data, mask):
     """
     Flattens feature data, ignoring items that are masked out of attention.
     """
-    flat_data = data.view(-1, data.size(-1))
-    attended_tokens = mask.view(-1).nonzero()[:, 0]
+    # Slices such as data[:, :-1] are generally non-contiguous.  reshape()
+    # preserves view()'s behavior for contiguous inputs and makes a copy only
+    # when the underlying strides cannot represent the flattened shape.
+    flat_data = data.reshape(-1, data.size(-1))
+    attended_tokens = mask.reshape(-1).nonzero()[:, 0]
     return flat_data[attended_tokens]

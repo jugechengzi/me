@@ -212,7 +212,7 @@ def test_batch_prediction(
             probs[i] += -torch.nn.functional.log_softmax(
                 logits[i, prefix_lens[i // 2] + j - 1, :], dim=0
             )[cur_tok].item()
-            if cfg.neighborhood_logits:
+            if cfg.neighborhood_logits and j == 0:
                 cur_logits_list.append(
                     logits[i, prefix_lens[i // 2] + j - 1, :].cpu()
                 )
@@ -243,7 +243,6 @@ def test_batch_prediction(
         {"target_new": probs[i].item(), "target_true": probs[i + 1].item()}
         for i in range(0, len(probs), 2)
     ], targets_correct
-
 
 
 

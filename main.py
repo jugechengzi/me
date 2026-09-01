@@ -6,8 +6,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from algs.wise import apply_wise_to_model
 from evals.evaluation import eval_one_edit
+from evals.neighborhood_locality import compute_neighborhood_locality
 from algs.alphaedit import apply_alphaedit_to_model
-from algs.memit import apply_memit_to_model
+from algs.memit import apply_memit_ori_to_model, apply_memit_to_model
 from algs.rome import apply_rome_to_model
 from algs.emmet import apply_emmet_to_model
 from algs.rect import apply_rect_to_model
@@ -28,7 +29,7 @@ import time
 ALG_DICT = {
     "alphaedit":  apply_alphaedit_to_model,
     "memit": apply_memit_to_model,
-    "memit_nok0": apply_memit_to_model,
+    "memit_ori": apply_memit_ori_to_model,
     "rome": apply_rome_to_model,
     "emmet": apply_emmet_to_model,
     "namet": apply_namet_to_model,
@@ -45,11 +46,6 @@ ALG_DICT = {
     "ft": apply_ft_to_model,
     "rledit": apply_rledit_to_model,
 }
-
-MODELSCOPE_PATH = "/home/liubingqing/.cache/modelscope/LLM-Research/"
-MODEL_PATH = {"meta-llama/Llama-3.1-8B-Instruct": MODELSCOPE_PATH + "Meta-Llama-3___1-8B-Instruct",
-              "meta-llama/Llama-3-8B-Instruct": MODELSCOPE_PATH + "Meta-Llama-3-8B-Instruct",
-              "meta-llama/Llama-3.2-3B-Instruct": MODELSCOPE_PATH + "Llama-3___2-3B-Instruct", }
 
 
 def set_random_seed(seed=42):
@@ -96,14 +92,26 @@ def eval_algo(cfg,model,tok,data):
         avg_metrics[key]=np.round(np.mean(value),3).item()
     return avg_metrics
 
+
+def get_neighborhood_logit_buffers(data_name):
+    if "zsre_mend_eval" in data_name:
+        from evals.zsre import target_true_logits, target_new_logits
+    elif "counterfact" in data_name:
+        from evals.counterfact import target_true_logits, target_new_logits
+    else:
+        raise ValueError(
+            "Synchronous neighborhood KL/top-k evaluation currently supports "
+            "CounterFact and ZSRE datasets only."
+        )
+    return target_true_logits, target_new_logits
+
 @hydra.main(config_path="configs", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
     set_random_seed(cfg.seed)
     device = torch.device("cuda:{}".format(cfg.gpu) if torch.cuda.is_available() else "cpu")
     print("Start Loading model")
-    model_name=cfg.llms.name
-    model_name_or_path=MODEL_PATH.get(model_name,model_name)
+    model_name_or_path=cfg.llms.name
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path,torch_dtype=cfg.model_dtype,trust_remote_code=True).to(device)
     tok = AutoTokenizer.from_pretrained(model_name_or_path,trust_remote_code=True)
     print("Loading model successfully")
@@ -111,105 +119,31 @@ def main(cfg: DictConfig) -> None:
 
     apply_algo = ALG_DICT[cfg.algs.name]
     data=load_data(cfg)
-    if cfg.unlearning_ab:
-        if "llama" not in cfg.llms.name.lower():
-            raise ValueError("目前只有llama3能进行unleaning_ab_test!")
-        from evals.lweval import unleaning_ab_predictions
-        file=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-")+"/"+cfg.data+"/unleaning_ab_predictions_all.txt"
-
-        if not os.path.exists(file):
-            print("Start Evaluating the Original Model")
-            pre_metrics = eval_algo(cfg, model, tok, data)
-            ensure_file_directory(file)
-            with open(file, "w", encoding="utf-8") as f:
-                f.write("The Evaluation Results before Editing:")
-                f.write("\n\n")
-                json.dump(pre_metrics, f, ensure_ascii=False, indent=2)
-                f.write("\n\n")
-                for line in unleaning_ab_predictions:
-                    f.write(line + "\n")
-            unleaning_ab_predictions.clear()
-            print("The Evaluation Results before Editing:")
-            print_dict(pre_metrics)
-
-        edited_model=load_model(model,cfg)
-        post_metrics = eval_algo(cfg, edited_model, tok, data)
-        file=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-") + "/" + cfg.data+"/"+cfg.algs.name + "/unlearning_ab_predictions_all.txt"
-        ensure_file_directory(file)
-        with open(file, "w", encoding="utf-8") as f:
-            f.write("The Evaluation Results before Editing:")
-            f.write("\n\n")
-            json.dump(post_metrics, f, ensure_ascii=False, indent=2)
-            f.write("\n\n")
-            for line in unleaning_ab_predictions:
-                f.write(line + "\n")
-        print("\n\n")
-        print("The Evaluation Results after Editing:")
-        print_dict(post_metrics)
-
-    if cfg.tf_props:
-        from evals.lweval import tf_props
-        file=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-")+"/"+cfg.data+"/tf_props.npy"
-        if not os.path.exists(file):
-            eval_algo(cfg, model, tok, data)
-            ensure_file_directory(file)
-            np.save(file,np.array(tf_props))
-            tf_props.clear()
-
-        eval_algo(cfg, edited_model, tok, data)
-        file=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-") + "/" + cfg.data+"/"+cfg.algs.name + "/tf_props.npy"
-        ensure_file_directory(file)
-        np.save(file,np.array(tf_props))
-
-    if cfg.inversion_tf:
-        if "llama" not in cfg.llms.name.lower() or cfg.data !="multi_counterfact_20877":
-            raise ValueError("目前只有llama3在multi_counterfact_20877上才能进行inversion_tf_test!")
-        from evals.lweval import inversion_tf_predicts
-        file=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-")+"/"+cfg.data+"/inversion_tf.txt"
-        
-        with open(cfg.data_dir+"/cf_after_inversion.json", "r") as f:
-            data = json.load(f)
-        print("data len=" + str(len(data)))
-        if not os.path.exists(file):
-            print("Start Evaluating the Original Model")
-            pre_metrics = eval_algo(cfg, model, tok, data)
-            ensure_file_directory(file)
-            with open(file, "w", encoding="utf-8") as f:
-                for line in inversion_tf_predicts:
-                    f.write(line + "\n")
-                f.write("\n\n")
-                f.write("The Evaluation Results before Editing:")
-                f.write("\n\n")
-                json.dump(pre_metrics, f, ensure_ascii=False, indent=2)
-                f.write("\n\n")
-            inversion_tf_predicts.clear()
-            print("The Evaluation Results before Editing:")
-            print_dict(pre_metrics)
-
-        edited_model=load_model(model,cfg)
-        post_metrics = eval_algo(cfg, edited_model, tok, data)
-        file=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-") + "/" + cfg.data+"/"+cfg.algs.name + "/inversion_tf.txt"
-        ensure_file_directory(file)
-        with open(file, "w", encoding="utf-8") as f:
-            for line in inversion_tf_predicts:
-                f.write(line + "\n")
-            f.write("\n\n")
-            f.write("The Evaluation Results before Editing:")
-            f.write("\n\n")
-            json.dump(post_metrics, f, ensure_ascii=False, indent=2)
-            f.write("\n\n")
-        print("\n\n")
-        print("The Evaluation Results after Editing:")
-        print_dict(post_metrics)
 
     if cfg.test_only:
         from evals.lweval import predicts
         from evals.lweval import abcd_orders
-        pre_results_file = cfg.results_dir + "/{}/{}/{}".format(cfg.data, cfg.llms.name.replace("/", "-"), cfg.save_name)
+        pre_eval_name = cfg.pre_eval_name or cfg.save_name
+        pre_results_file = cfg.results_dir + "/{}/{}/{}".format(
+            cfg.data,
+            cfg.llms.alias.replace("/", "-"),
+            pre_eval_name,
+        )
+        pre_logits_file = pre_results_file + "_neighborhood_target_logits.pt"
         ensure_file_directory(pre_results_file)
-        if not os.path.exists(pre_results_file):
+        need_pre_evaluation = not os.path.exists(pre_results_file)
+        if cfg.neighborhood_logits and not os.path.exists(pre_logits_file):
+            need_pre_evaluation = True
+            print("Original neighborhood logits are missing; recomputing original evaluation.")
+        if need_pre_evaluation:
             start_time = time.time()
             print("Start Evaluating the Original Model")
+            if cfg.neighborhood_logits:
+                target_true_logits, target_new_logits = get_neighborhood_logit_buffers(
+                    cfg.data
+                )
+                target_true_logits.clear()
+                target_new_logits.clear()
             pre_metrics=eval_algo(cfg, model, tok, data)#不是每一次都有必要进行这个。
             end_time = time.time()
             hours = np.round((end_time - start_time) / 3600, 3)
@@ -221,21 +155,17 @@ def main(cfg: DictConfig) -> None:
                 json.dump(pre_metrics, f, ensure_ascii=False, indent=2)
                 f.write("\n\n")
             if cfg.neighborhood_logits:
-                if cfg.data == "zsre_mend_eval_19086":
-                    from evals.zsre import target_true_logits,target_new_logits
-                else:
-                    from evals.counterfact import target_true_logits,target_new_logits
                 logits_dict = {
                     "target_true_logits": target_true_logits,
                     "target_new_logits": target_new_logits
                 }
-                torch.save(logits_dict, pre_results_file + "_neighborhood_target_logits.pt")
+                torch.save(logits_dict, pre_logits_file)
                 target_true_logits.clear()
                 target_new_logits.clear()
             print("End Evaluating the Original Model")
             if cfg.lw_eval:
-                file=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-")+"/"+cfg.data+"/pred_lw_eval.npy"
-                file_orders=cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-")+"/"+cfg.data+"/abcd_orders.npy"
+                file=cfg.results_dir+"/lw_eval/"+cfg.llms.alias.replace("/", "-")+"/"+cfg.data+"/pred_lw_eval.npy"
+                file_orders=cfg.results_dir+"/lw_eval/"+cfg.llms.alias.replace("/", "-")+"/"+cfg.data+"/abcd_orders.npy"
                 ensure_file_directory(file)
                 ensure_file_directory(file_orders)
                 np.save(file,np.array(predicts))
@@ -244,12 +174,52 @@ def main(cfg: DictConfig) -> None:
                 predicts.clear()
         edited_model=load_model(model,cfg)
         print("Start Evaluating the Edited Model")
+        if cfg.neighborhood_logits:
+            target_true_logits, target_new_logits = get_neighborhood_logit_buffers(
+                cfg.data
+            )
+            target_true_logits.clear()
+            target_new_logits.clear()
         post_metrics = eval_algo(cfg, edited_model, tok, data)
         # formatted_time = datetime.now().strftime("%d_%H_%M_%S")
         # post_results_file = cfg.results_dir + "/{}/{}/{}-{}-{}".format(cfg.data, cfg.llms.name.replace("/","-"),cfg.algs.name, cfg.num_edits,formatted_time)
-        post_results_file = cfg.results_dir + "/{}/{}/{}-{}".format(cfg.data, cfg.llms.name.replace("/","-"),cfg.algs.name, cfg.save_name)
-
+        post_results_file = cfg.results_dir + "/{}/{}/{}-{}".format(cfg.data, cfg.llms.alias.replace("/","-"),cfg.algs.name, cfg.save_name)
         ensure_file_directory(post_results_file)
+
+        if cfg.neighborhood_logits:
+            # Edited logits are consumed immediately by the synchronous
+            # KL/top-k calculation, so keeping another full-vocabulary cache
+            # on disk only wastes space. The reusable original-model cache is
+            # deliberately preserved.
+            post_logits_file = (
+                post_results_file + "_neighborhood_target_logits.pt"
+            )
+            original_logits = None
+            try:
+                original_logits = torch.load(
+                    pre_logits_file, map_location="cpu"
+                )["target_true_logits"]
+                locality_metrics = compute_neighborhood_locality(
+                    original_logits,
+                    target_true_logits,
+                    topks=cfg.neighborhood_locality_topks,
+                    batch_size=cfg.neighborhood_locality_batch_size,
+                    device=device,
+                )
+                post_metrics.update(locality_metrics)
+                print("Neighborhood locality metrics:")
+                print_dict(locality_metrics)
+            finally:
+                target_true_logits.clear()
+                target_new_logits.clear()
+                del original_logits
+                if os.path.exists(post_logits_file):
+                    os.remove(post_logits_file)
+                    print(
+                        "Removed edited neighborhood logits cache: "
+                        f"{post_logits_file}"
+                    )
+
         with open(post_results_file, "w", encoding="utf-8") as f:
             f.write(OmegaConf.to_yaml(cfg) + "\n\n")  # 写入字符串，加空行分隔
             f.write("The Evaluation Results after Editing:")
@@ -257,19 +227,9 @@ def main(cfg: DictConfig) -> None:
             json.dump(post_metrics, f, ensure_ascii=False, indent=2)
             f.write("\n\n")
         print("End Evaluating the Edited Model")
-        if cfg.neighborhood_logits:
-            if cfg.data == "zsre_mend_eval_19086":
-                from evals.zsre import target_true_logits,target_new_logits
-            else:
-                from evals.counterfact import target_true_logits,target_new_logits
-            logits_dict = {
-                "target_true_logits": target_true_logits,
-                "target_new_logits": target_new_logits
-            }
-            torch.save(logits_dict, post_results_file + "_neighborhood_target_logits.pt")
         if cfg.lw_eval:
-            file = cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-") + "/" + cfg.data+"/"+cfg.algs.name + "/pred_lw_eval.npy"
-            file_orders = cfg.results_dir+"/lw_eval/"+cfg.llms.name.replace("/", "-") + "/" + cfg.data+"/"+cfg.algs.name + "/abcd_orders.npy"
+            file = cfg.results_dir+"/lw_eval/"+cfg.llms.alias.replace("/", "-") + "/" + cfg.data+"/"+cfg.algs.name + "/pred_lw_eval.npy"
+            file_orders = cfg.results_dir+"/lw_eval/"+cfg.llms.alias.replace("/", "-") + "/" + cfg.data+"/"+cfg.algs.name + "/abcd_orders.npy"
             ensure_file_directory(file)
             ensure_file_directory(file_orders)
             np.save(file, np.array(predicts))

@@ -19,8 +19,12 @@ def compute_z(
     context_templates: List[str],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Computes the value (right) vector for the rank-1 update.
-    Runs a simple optimization procedure.
+    Compute the canonical value target and its context-trained displacement.
+
+    ``target`` is the canonical prompt representation plus ``delta``.  The
+    same ``delta`` is injected into every rewriting context while it is
+    optimized, so callers that train on those contexts can construct the
+    context-specific target ``h_i,c + delta_i``.
     """
     device = torch.device("cuda:{}".format(cfg.gpu) if torch.cuda.is_available() else "cpu")
     # Get model parameters
@@ -330,7 +334,7 @@ def compute_z(
         f"Init norm {target_init.norm()} | Delta norm {delta.norm()} | Target norm {target.norm()}"
     )
 
-    return target
+    return target, delta
 
 
 def get_module_input_output_at_words(

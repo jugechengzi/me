@@ -114,7 +114,9 @@ def test_batch_prediction_acc(model, tok, prompts: typing.List[str], target):
         gathered = torch.gather(logits, 1, to_gather).squeeze(1)#[bs,vocab_size]取出下一个单词的预测概率
         ans = torch.argmax(gathered, dim=1)#[bs]查看预测概率最大的那个token。
 
-        target_true_logits.append(gathered.cpu())
+        # Locality compares only the full-vocabulary distribution that predicts
+        # the first token of the original neighborhood answer.
+        target_true_logits.append(gathered[:1].cpu())
         correct_id = tok(target, padding=True, return_tensors="pt",
                          add_special_tokens=False).to(device)["input_ids"]#这个和ans对应，ans是预测的，而correct_id是正确的。
         # Temporary hack to deal with foreign characters.

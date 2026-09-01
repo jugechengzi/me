@@ -1,0 +1,4 @@
+name: memit_ori
+add_old_keys: True
+mi_cache_enabled: True
+mi_cache_force_recompute: False

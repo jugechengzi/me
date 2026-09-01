@@ -1,5 +1,18 @@
 name: meta-llama/Llama-3.2-3B-Instruct
 
+memit_joint:
+  gd_lr: 1.0e-4
+  gd_weight_decay: 0.0
+  joint_epochs: 300
+  alpha: 4.0
+  gd_max_grad_norm: 100.0
+  layer_norm_mode: none
+  layer_norm_beta: 0.0
+  layer_update_max_ratio: 0.15
+
+memit_ori:
+  L2: 0.0
+
 fact_token: subject_last
 
 clamp_norm_factor: 0.75

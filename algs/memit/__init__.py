@@ -1,1 +1,2 @@
-from .memit_main import apply_memit_to_model
+from .memit_joint import apply_memit_to_model
+from .memit_main import apply_memit_to_model as apply_memit_ori_to_model

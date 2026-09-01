@@ -53,13 +53,13 @@ def load_data(cfg):
 
 def load_model(model,cfg):
     weights_dir = cfg.cache_dir + "/saved_weights"
-    if cfg.algs.name == 'wise':
-        device = f'cuda:{cfg.gpu}'
-        editor = WISE.WISE(model=model, config=cfg.llms, device=device)
-        editor.load(f"{weights_dir}/{cfg.algs.name}/{cfg.data}-{cfg.load_name}-{cfg.llms.name.replace("/", "-")}.pt")
-        return editor
+    # if cfg.algs.name == 'wise':
+    #     device = f'cuda:{cfg.gpu}'
+    #     editor = WISE.WISE(model=model, config=cfg.llms, device=device)
+    #     editor.load(f"{weights_dir}/{cfg.algs.name}/{cfg.data}-{cfg.load_name}-{cfg.llms.alias.replace("/", "-")}.pt")
+    #     return editor
     weights_file = weights_dir + "/{}/{}-{}-{}.pt".format(cfg.algs.name, cfg.data, cfg.load_name,
-                                                          cfg.llms.name.replace("/", "-"))
+                                                          cfg.llms.alias.replace("/", "-"))
     device=torch.device("cuda:{}".format(cfg.gpu) if torch.cuda.is_available() else "cpu")
     weights=torch.load(weights_file)
     with torch.no_grad():
@@ -70,9 +70,9 @@ def load_model(model,cfg):
 
 def save_model(model,cfg):
     weights_dir = cfg.cache_dir + "/saved_weights"
-    if cfg.algs.name == 'wise':
-        model.save(f"{weights_dir}/{cfg.algs.name}/{cfg.data}-{cfg.save_name}-{cfg.llms.name.replace("/", "-")}.pt")
-        return
+    # if cfg.algs.name == 'wise':
+    #     model.save(f"{weights_dir}/{cfg.algs.name}/{cfg.data}-{cfg.save_name}-{cfg.llms.alias.replace("/", "-")}.pt")
+    #     return
     if cfg.algs.name == 'rledit':
         weights = {
             f"{edite_module}.weight": nethook.get_parameter(
@@ -88,6 +88,6 @@ def save_model(model,cfg):
             for layer in cfg.llms.layers
         }
     weights_file = weights_dir + "/{}/{}-{}-{}.pt".format(cfg.algs.name, cfg.data, cfg.save_name,
-                                                          cfg.llms.name.replace("/", "-"))
+                                                          cfg.llms.alias.replace("/", "-"))
     ensure_file_directory(weights_file)
     torch.save(weights, weights_file)  # 好像就完成了，只要保存好这个东西就可以了。
