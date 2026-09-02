@@ -73,6 +73,7 @@ DEFAULT_TARGET_MODULES = (
     "o_proj",
     "gate_proj",
     "up_proj",
+    "gate_up_proj",
     "down_proj",
 )
 
@@ -80,7 +81,7 @@ DEFAULT_TARGET_MODULES = (
 SHARED_INPUT_GROUPS: Mapping[str, Tuple[str, ...]] = {
     "attn_qkv": ("q_proj", "k_proj", "v_proj"),
     "attn_o": ("o_proj",),
-    "mlp_gate_up": ("gate_proj", "up_proj"),
+    "mlp_gate_up": ("gate_proj", "up_proj", "gate_up_proj"),
     "mlp_down": ("down_proj",),
 }
 
@@ -130,7 +131,7 @@ def _linear_input_dim(module: torch.nn.Module, module_name: str) -> int:
 def _module_name(cfg: DictConfig, layer: int, target: str) -> str:
     if target in {"q_proj", "k_proj", "v_proj", "o_proj"}:
         return f"{cfg.llms.attn_module_tmp.format(layer)}.{target}"
-    if target in {"gate_proj", "up_proj", "down_proj"}:
+    if target in {"gate_proj", "up_proj", "gate_up_proj", "down_proj"}:
         return f"{cfg.llms.mlp_module_tmp.format(layer)}.{target}"
     raise ValueError(f"Unsupported LoRA target: {target}")
 

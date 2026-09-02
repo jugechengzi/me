@@ -3,6 +3,42 @@ import torch
 from util import nethook
 from util.utility import ensure_file_directory
 from algs.wise import WISE
+
+
+MEMIT_LORA_CHECKPOINT_FORMAT = "memit_lora_v1"
+
+
+def _merge_memit_lora_checkpoint(model, checkpoint):
+    if checkpoint.get("__format__") != MEMIT_LORA_CHECKPOINT_FORMAT:
+        raise ValueError(
+            "Unsupported MEMIT-LoRA checkpoint format: "
+            f"{checkpoint.get('__format__')!r}"
+        )
+    adapters = checkpoint.get("adapters")
+    if not isinstance(adapters, dict) or not adapters:
+        raise ValueError("MEMIT-LoRA checkpoint has no adapters")
+    with torch.no_grad():
+        for module_name, state in adapters.items():
+            weight = nethook.get_parameter(model, f"{module_name}.weight")
+            a = state["a"].to(device=weight.device, dtype=torch.float32)
+            b = state["b"].to(device=weight.device, dtype=torch.float32)
+            delta = (b @ a) * float(state["scale"])
+            if bool(state.get("transpose_for_weight", False)):
+                delta = delta.T
+            if tuple(delta.shape) != tuple(weight.shape):
+                raise ValueError(
+                    f"LoRA delta for {module_name} has shape {tuple(delta.shape)}, "
+                    f"expected {tuple(weight.shape)}"
+                )
+            if not torch.isfinite(delta).all():
+                raise FloatingPointError(
+                    f"LoRA delta for {module_name} contains non-finite values"
+                )
+            weight.add_(delta.to(dtype=weight.dtype))
+    print(f"Merged {len(adapters)} MEMIT-LoRA adapters into the base model")
+    return model
+
+
 def load_data(cfg):
     if cfg.data.endswith(".json"):
         data_file=cfg.data_dir+"/"+cfg.data
@@ -61,7 +97,9 @@ def load_model(model,cfg):
     weights_file = weights_dir + "/{}/{}-{}-{}.pt".format(cfg.algs.name, cfg.data, cfg.load_name,
                                                           cfg.llms.alias.replace("/", "-"))
     device=torch.device("cuda:{}".format(cfg.gpu) if torch.cuda.is_available() else "cpu")
-    weights=torch.load(weights_file)
+    weights=torch.load(weights_file, map_location="cpu")
+    if isinstance(weights, dict) and weights.get("__format__") == MEMIT_LORA_CHECKPOINT_FORMAT:
+        return _merge_memit_lora_checkpoint(model, weights)
     with torch.no_grad():
         for key, value in weights.items():
             weight=nethook.get_parameter(model,key)
@@ -73,7 +111,15 @@ def save_model(model,cfg):
     # if cfg.algs.name == 'wise':
     #     model.save(f"{weights_dir}/{cfg.algs.name}/{cfg.data}-{cfg.save_name}-{cfg.llms.alias.replace("/", "-")}.pt")
     #     return
-    if cfg.algs.name == 'rledit':
+    if cfg.algs.name == "memit_lora":
+        weights = getattr(model, "_memit_lora_payload", None)
+        if weights is None:
+            raise RuntimeError(
+                "MEMIT-LoRA finished without a compact adapter payload"
+            )
+        if weights.get("__format__") != MEMIT_LORA_CHECKPOINT_FORMAT:
+            raise RuntimeError("Invalid compact MEMIT-LoRA adapter payload")
+    elif cfg.algs.name == 'rledit':
         weights = {
             f"{edite_module}.weight": nethook.get_parameter(
                 model, f"{edite_module}.weight"

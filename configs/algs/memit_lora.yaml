@@ -1,0 +1,12 @@
+name: memit_lora
+
+# Expand each edit with the same generated context templates used by the
+# existing joint optimizer. Disable to train only on the original prompts.
+joint_context_training: true
+
+# Compact A/B optimizer-state checkpoint used to resume interrupted training.
+checkpoint_enabled: true
+checkpoint_resume: true
+
+log_interval: 10
+tolerance: 1.0e-5

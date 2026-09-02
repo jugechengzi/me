@@ -3,6 +3,7 @@ einops==0.8.1
 higher==0.2.1
 hydra-core==1.3.2
 transformers==4.51.3
+peft==0.15.2
 datasets==2.21.0
 matplotlib==3.10.3
 spacy==3.4.1

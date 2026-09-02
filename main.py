@@ -8,7 +8,11 @@ from algs.wise import apply_wise_to_model
 from evals.evaluation import eval_one_edit
 from evals.neighborhood_locality import compute_neighborhood_locality
 from algs.alphaedit import apply_alphaedit_to_model
-from algs.memit import apply_memit_ori_to_model, apply_memit_to_model
+from algs.memit import (
+    apply_memit_lora_to_model,
+    apply_memit_ori_to_model,
+    apply_memit_to_model,
+)
 from algs.rome import apply_rome_to_model
 from algs.emmet import apply_emmet_to_model
 from algs.rect import apply_rect_to_model
@@ -29,6 +33,7 @@ import time
 ALG_DICT = {
     "alphaedit":  apply_alphaedit_to_model,
     "memit": apply_memit_to_model,
+    "memit_lora": apply_memit_lora_to_model,
     "memit_ori": apply_memit_ori_to_model,
     "rome": apply_rome_to_model,
     "emmet": apply_emmet_to_model,

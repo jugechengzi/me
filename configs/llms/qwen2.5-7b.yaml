@@ -4,6 +4,11 @@ alias: qwen2.5-7b-instruct
 memit_joint:
   target_loss_mode: hidden_mse
   original_prompt_loss_share: null
+  e2e_subject_kl_factor: 0.0625
+  e2e_hidden_drift_factor: 0.0
+  e2e_hidden_drift_layers: edit
+  e2e_hidden_drift_normalize: true
+  e2e_warmup_epochs: 5
   gd_lr: 1.0e-4
   gd_weight_decay: 0.0
   joint_epochs: 300
@@ -12,6 +17,23 @@ memit_joint:
   layer_norm_mode: none
   layer_norm_beta: 0.0
   layer_update_max_ratio: 0.15
+
+memit_lora:
+  layers: all
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  rank: 16
+  lora_alpha: 16.0
+  lr: 1.0e-4
+  weight_decay: 0.0
+  epochs: 40
+  micro_batch_size: 8
+  max_grad_norm: 100.0
+  preservation_alpha: 1.0e-3
+  original_prompt_loss_share: 0.5
+  covariance_cache_namespace: lora-all-linear
+  covariance_manifests: []
+  covariance_device: cuda
+  checkpoint_interval: 5
 
 memit_ori:
   L2: 0.0
